@@ -1,0 +1,244 @@
+Parameters:
+  HostName:
+    Type: String
+    Description: The host for DNS.
+  HostedZone:
+    Type: String
+    Description: The hosted zone for DNS.
+  StaticWebDomainName:
+    Type: String
+    Description: The static website domain name.
+  CloudFrontPriceClass:
+    Type: String
+    Description: The CloudFront distribution price class
+    Default: 'PriceClass_100'
+    AllowedValues:
+      - 'PriceClass_100'
+      - 'PriceClass_200'
+      - 'PriceClass_All'
+  AcmCertificate:
+    Type: String
+    Description: The ARN of the SSL certificate to use for the CloudFront distribution.
+
+Resources:
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: PublicRead
+      BucketName:
+        Fn::Sub: ${Namespace}-static-${ServiceName}-${AcptEnv}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Domain
+          Value:
+            Ref: StaticWebDomainName
+
+  DeployStaticWeb:
+    Condition: IsBuildEnabled
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache:
+        Location:
+          Fn::Sub: ${PipelineBucket}/${Namespace}-${ServiceName}/_cache/deploy-static-web
+        Type: S3
+      Description: Build artifact from source
+      EncryptionKey:
+        Ref: CodePipelineKeyArn
+      Environment:
+        ComputeType:
+          Ref: BuildComputeType
+        Image:
+          Fn::Sub: ${BuildImage}
+        Type:
+          Ref: BuildType
+      Name:
+        Fn::Sub: ${Namespace}-pipeline-${ServiceName}-deploy-static-web
+      ServiceRole:
+        Ref: CodeBuildCDAcptRoleArn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec:
+          Fn::Sub: |
+            version: 0.1
+            phases:
+              post_build:
+                commands:
+                  - aws s3 sync --delete --acl public-read ./build/ s3://${SiteBucket}/
+                  - aws cloudfront create-invalidation --distribution-id ${CloudFrontDistribution} --paths '/*/*'
+            artifacts:
+              type: zip
+              files:
+                - ./**/*
+      TimeoutInMinutes: 10
+    Type: AWS::CodeBuild::Project
+
+  DeployAcceptance:
+    Condition: IsAcptEnabled
+    Properties:
+      Source:
+        BuildSpec:
+          Fn::Sub: |
+            version: 0.2
+            phases:
+              build:
+                commands:
+                  - curl -sL ${MuDownloadBaseurl}/v${MuDownloadVersion}/${MuDownloadFile} -o /usr/bin/mu
+                  - chmod +rx /usr/bin/mu
+                  - mu -c ${MuBasedir}/${MuFilename} init
+                  - mu -c ${MuBasedir}/${MuFilename} --assume-role ${MuAcptRoleArn} --disable-iam env up ${AcptEnv}
+                  - mu -c ${MuBasedir}/${MuFilename} --assume-role ${MuAcptRoleArn} env show ${AcptEnv} -f json > env.json
+                  - mu -c ${MuBasedir}/${MuFilename} --assume-role ${MuAcptRoleArn} env show ${AcptEnv} -f shell > mu-env.sh
+                artifacts:
+                  files:
+                    - '**/*'
+        Type: CODEPIPELINE
+      TimeoutInMinutes: 30
+    Type: AWS::CodeBuild::Project
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Stages:
+        Fn::Replace:
+          - Name: Source
+            Actions:
+              - ActionTypeId:
+                  Category: Source
+                  Owner: ThirdParty
+                  Provider: GitHub
+                  Version: "1"
+                Configuration:
+                  Branch:
+                    Ref: SourceBranch
+                  OAuthToken:
+                    Ref: GitHubToken
+                  Owner:
+                    Fn::Select:
+                      - "0"
+                      - Fn::Split:
+                          - /
+                          - Ref: SourceRepo
+                  Repo:
+                    Fn::Select:
+                      - "1"
+                      - Fn::Split:
+                          - /
+                          - Ref: SourceRepo
+                InputArtifacts: []
+                Name: Source
+                OutputArtifacts:
+                  - Name: SourceOutput
+                RunOrder: 10
+          - Name: Build
+            Actions:
+              - ActionTypeId:
+                  Category: Build
+                  Owner: AWS
+                  Provider: CodeBuild
+                  Version: "1"
+                Configuration:
+                  ProjectName:
+                    Ref: CodeBuildArtifact
+                InputArtifacts:
+                  - Name: SourceOutput
+                Name: Artifact
+                OutputArtifacts:
+                  - Name: ArtifactOutput
+                RunOrder: 10
+          - Name: Acceptance
+            Actions:
+              - ActionTypeId:
+                  Category: Build
+                  Owner: AWS
+                  Provider: CodeBuild
+                  Version: "1"
+                Configuration:
+                  ProjectName:
+                    Ref: DeployAcceptance
+                InputArtifacts:
+                  - Name: SourceOutput
+                Name: DeployEnvironment
+                OutputArtifacts:
+                  - Name: DeployAcceptanceOutput
+                RunOrder: 10
+              - ActionTypeId:
+                  Category: Build
+                  Owner: AWS
+                  Provider: CodeBuild
+                  Version: "1"
+                Configuration:
+                  ProjectName:
+                    Ref: DeployStaticWeb
+                InputArtifacts:
+                  - Name: ArtifactOutput
+                Name: DeployStaticWeb
+                OutputArtifacts:
+                  - Name: DeployStaticWebOutput
+                RunOrder: 20
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - Ref: StaticWebDomainName
+        DefaultCacheBehavior:
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+          TargetOriginId:
+            Ref: StaticWebDomainName
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /404.html
+        Enabled: true
+        HttpVersion: http2
+        Origins:
+          - DomainName:
+              Fn::Sub: ${SiteBucket}.s3-website-${AWS::Region}.amazonaws.com
+            Id:
+              Ref: StaticWebDomainName
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+        PriceClass:
+          Ref: CloudFrontPriceClass
+        ViewerCertificate:
+          AcmCertificateArn:
+            Fn::Sub: arn:${AWS::Partition}:acm:us-east-1:${AWS::AccountId}:certificate/${AcmCertificate}
+          MinimumProtocolVersion: TLSv1
+          SslSupportMethod: sni-only
+      Tags:
+        - Key: Domain
+          Value:
+            Ref: StaticWebDomainName
+
+  SiteDns:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneName:
+        Fn::Sub: ${HostedZone}.
+      Comment:
+        Fn::Sub: Static web DNS for ${StaticWebDomainName}
+      RecordSets:
+        - Name:
+            Fn::Sub: ${HostName}.${HostedZone}.
+          Type: A
+          AliasTarget:
+            HostedZoneId: Z2FDTNDATAQYW2
+            DNSName:
+              Fn::GetAtt:
+                - CloudFrontDistribution
+                - DomainName

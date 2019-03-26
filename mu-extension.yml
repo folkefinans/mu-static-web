@@ -1,0 +1,4 @@
+name: static-web
+version: '1.0'
+
+templateUpdateMode: merge

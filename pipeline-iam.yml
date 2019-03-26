@@ -1,0 +1,30 @@
+Resources:
+  CodeBuildCDAcptRole:
+    Properties:
+      Policies:
+        - PolicyName: codepipeline-static-web
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - codebuild:*
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                Resource: "*"
+                Effect: Allow
+              - Action:
+                  - s3:PutObject
+                Resource:
+                  - arn:aws:s3:::codepipeline*
+                Effect: Allow
+              - Action:
+                  - s3:*
+                  - cloudformation:*
+                  - iam:PassRole
+                  - cloudfront:CreateInvalidation
+                Resource: "*"
+                Effect: Allow
+            Version: '2012-10-17'

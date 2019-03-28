@@ -30,6 +30,7 @@ Resources:
         Fn::Sub: ${Namespace}-static-${ServiceName}-${AcptEnv}
       WebsiteConfiguration:
         IndexDocument: index.html
+        ErrorDocument: 404.html
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:

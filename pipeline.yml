@@ -72,7 +72,7 @@ Resources:
               post_build:
                 commands:
                   - aws s3 sync --delete --acl public-read ./build/ s3://${SiteBucket}/
-                  - aws cloudfront create-invalidation --distribution-id ${CloudFrontDistribution} --paths '/*/*'
+                  - aws cloudfront create-invalidation --distribution-id ${CloudFrontDistribution} --paths '*' '/*/*'
             artifacts:
               type: zip
               files:

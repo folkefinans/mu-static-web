@@ -67,7 +67,10 @@ Resources:
         Type: CODEPIPELINE
         BuildSpec:
           Fn::Sub: |
-            version: 0.1
+            version: 0.2
+              install:
+                runtime-versions:
+                  nodejs: 10
             phases:
               post_build:
                 commands:

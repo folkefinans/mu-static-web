@@ -68,10 +68,12 @@ Resources:
         BuildSpec:
           Fn::Sub: |
             version: 0.2
+            
+            phases:
               install:
                 runtime-versions:
                   nodejs: 10
-            phases:
+
               post_build:
                 commands:
                   - aws s3 sync --delete --acl public-read ./build/ s3://${SiteBucket}/
